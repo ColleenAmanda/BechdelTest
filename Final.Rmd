@@ -1,0 +1,827 @@
+---
+title: "Ratings"
+author: "Colleen Reynolds"
+output: html_document
+---
+#Overview and Motivation
+With the recent rise of feminism into mainstream consciousness and the #MeToo movement in Hollywood, there has been many public discussions on the evolving representation of women in film and media. The Bechdel Test created by Alison Bechdel assesses just that! 
+
+The test is simple - in order to pass it the movie must: 
+
+(1) have at least two female characters, 
+
+(2) those two characters must talk to each other at least once in the film, and 
+
+(3) when they talk to each other it must be about something other than a man. 
+
+Given our collective interests in feminism, marginalized group representation, movies, and geek culture we are interested in seeing if the current changes in gender politics translates into changes in representation of women in film narratives, using the Bechdel Test as a proxy. 
+
+#Initial Questions
+In this project, we would like to use various data sets about films and the Bechdel Test to learn more about how positive representation of women in films is associated (or not) with broader changes in the values and norms of the society we live in. 
+
+Some questions we seek to ask, using the available data, are: 
+
+1) What is the relationship between the average ratings a film gets and its representation of women? 
+
+2) What is the relationship between the profitability of a film and its representation of women? 
+
+3)Does the proportion of films that pass the Bechdel Test vary by genre? 
+
+4) Can we predict whether a movie will pass the Bechdel Test, based on information we'd have when it first comes out?
+
+5) And, for the sub-sample of movies for which we have racial and demographic information: Are movies that are better at representing women also better at representing racial diversity? In other words, are movies that pass the Bechdel Test more likely than those that fail the Bechdel Test to include speaking non-white characters? 
+
+6) Moreover, we did time series analyses to see if any of these relationships change over time.
+
+#Data
+
+##Overview
+
+Our main database was FiveThirtyEight's Bechdel Test database, which gave us information about the title, year of release, whether or not the film passed the Bechdel Test, and the amount of money it made domestically and internationally. It also had information about the IMDB code of the movies, which we used to merge the data set with IMDB's database of films, to get more information about ratings, genre, and movie run-time . Finally, for the biopics and race analysis, we merged these with the biopics database, also from FiveThirtyEight.
+
+##Bechdel sources:
+
+* [Movies with Bechdel Test scores from FiveThirtyEight.](https://github.com/fivethirtyeight/Bechdel/tree/master/bechdel)
+
+* [More Bechdel about the movies from the title.basics and title.ratings IMDb Bechdelsets.](https://Bechdelsets.imdbws.com/)
+
+* [More detailed Bechdel available about race for biographical movies from FiveThirtyEight.](https://github.com/fivethirtyeight/Bechdel/tree/master/biopics)
+
+##Cleanup:
+
+The .tsv files provided by IMDb were converted to .csv files using a trial version of WinZip 23.0. The title.basics file was too large to readily import into R. Therefore, Bechdel from the IMDB tables and biopics table were left joined to the Bechdel movies table using JMP (Heather said this was OK). The IMDb identifier as the unique identifier for the linkage. 
+
+Of note, the biopics Bechdel set did not contain the IMDb identifier. However, it contained a column, "site", which included a link to the IMDb website for each movie. By taking the last 10 characters from the site column contents and then removing the last character (using MS Excel), the IMDb identifier was obtained for the biopics. There were 761 biopic movies, however, after removing duplicates, there were 672 unique biopic movies. 
+
+There were 1794 movies with Bechdel Test scores. All but 3 of these movies had additional information available from IMDb (such as genre and average  rating). Only 82 movies with a Bechdel Test score available also had Bechdel available from the biopics Bechdel set. A subset analysis was done on these 82 movies to investigate the relationship between cast characteristics (such as lead actor gender and race) and Bechdel Test score.
+
+For genre, multiple genres could be listed for a given movie. str_detect from the stringr package was used to extract whether each possible genre was represented for a given movie. This resulted in a total of 22 columns, one for each genre, and an indication for each movie row about whether that movie was of that genre. 
+
+```{r, set up}
+library(caret)
+library(tidyverse)
+library(ggplot2)
+library(broom)
+library(stringr)
+library(tree)
+library(tidyr)
+library(dslabs)
+ds_theme_set()
+library(readr)
+library(stringr)
+bechdel<-read.csv("C:/Users/Colleen Reynolds/Dropbox/Harvard/Data_Science/Group project/data1.csv")
+bechdel<-bechdel%>%mutate(Action=str_detect(genres, "Action"), Adventure=str_detect(genres,"Adventure"),
+                   Animation=str_detect(genres, "Animation"),Biography=str_detect(genres, "Biography"),
+                   Comedy=str_detect(genres, "Comedy"), Crime=str_detect(genres,"Crime"),
+                   Documentary=str_detect(genres, "Documentary"),Drama=str_detect(genres, "Drama"),
+                   Family=str_detect(genres,"Family"), Fantasy=str_detect(genres, "Fantasy"),
+                   History=str_detect(genres, "History"),Horror=str_detect(genres, "Horror"),
+                   Music=str_detect(genres, "Music"), Musical=str_detect(genres, "Musical"),
+                   Mystery=str_detect(genres,"Mystery"),News=str_detect(genres, "News"),
+                   Romance=str_detect(genres, "Romance"),SciFi=str_detect(genres, "Sci-Fi"),
+                   Sport=str_detect(genres,"Sport"),Thriller=str_detect(genres, "Thriller"),
+                   War=str_detect(genres, "War"),Western=str_detect(genres, "Western"))
+```
+
+#Ratings
+
+We began by exploring our data on ratings. We have data on the average IMDB ratings for 1,791 movies. The ratings range from 2.2 to 9.3, with a mean of 6.8 and standard deviation of 0.9.
+```{r, rating.explore}
+bechdel_rate<-bechdel%>%filter(!is.na(binary), !is.na(averageRating))%>%mutate(domgross_2013.=as.numeric(domgross_2013.), intgross_2013.=as.numeric(intgross_2013.))
+#basics about the data
+summary(bechdel_rate$averageRating)
+sd(bechdel_rate$averageRating)
+summary(bechdel_rate$binary)
+```
+
+An inspection of a Q-Q plot and histogram of the average ratings showed an approximately normal shape. 
+
+```{r}
+##checking normality
+bechdel_rate%>%ggplot(aes(averageRating))+geom_histogram(binwidth = .3)
+bechdel_rate%>%ggplot(aes(sample=averageRating))+stat_qq()
+```
+
+When we stratified by whether movies passed the Bechdel Test, the two distributions were very similar. The mean rating of movies that failed the Bechdel  was slightly higher (6.87, SD=0.91) than the average rating of movies that failed (6.62, SD=0.91). While this difference is only about a quarter of a standard deviation, it is statistically significant (p<0.00001). 
+```{r}
+#quant comparison of bech test
+bechdel_rate%>%group_by(binary)%>%summarise(avg=mean(averageRating), sdev=sd(averageRating), mini=min(averageRating), maxi=max(averageRating))
+
+#distrobutions
+bechdel_rate%>%ggplot(aes(averageRating, fill=binary)) + geom_density(alpha = 0.2)+xlab("Average Rating")+ylab("Density")+ggtitle("Distribution of Ratings By Bechdel Test Results")+ scale_fill_discrete(name = "Bechdel Test")
+
+#boxplots
+bechdel_rate%>%ggplot()+geom_boxplot(aes(binary,averageRating))+xlab("Bechedel Test")+ylab("Average Rating")+ggtitle("Movie Ratings by Bechdel Test")
+
+#Simple T-test of association
+bechdel_rate%>%{t.test(.$averageRating~.$binary)}
+```
+
+We suspected that the association between passing the Bechdel Test and average rating may be confounded by the number of votes a movie received. Movies that have more votes are likely more popular, and we suspected that many mainstream headliners would fail to pass the Bechdel Test. 
+
+```{r, rating.analysis}
+#concern for confounding by NumVotes
+bechdel_rate%>%ggplot(aes(numVotes_Rating, averageRating, group=binary, col=binary))+geom_point(alpha=0.3, shape=16)+geom_smooth()+ggtitle("Exploration of Confounding")+xlab("Number of Voters")+ylab("Average Rating")+ scale_fill_discrete(name = "Bechdel Test")
+```
+
+Thus, we conducted an analysis stratifying by the decile of number of votes. After stratifying by decile of number of votes, the the Bechdel Test is only associated significantly associated with a lower rating in the 3$^th$  and 10$^th$ decile. This may be in part because we are dividing up our sample size,so we have lower power, but an inspection of the results also show that the differences within deciles appear much smaller than what we saw before, and in three deciles, the passing movies actually have higher scores. 
+
+```{r}
+bechdel_rate<-bechdel_rate%>%mutate(NV_deciles=cut(bechdel_rate$numVotes_Rating, breaks=c(quantile(bechdel_rate$numVotes_Rating, probs = seq(0, 1, by = 0.10))),include.lowest=TRUE))
+
+bechdel_rate%>%group_by(NV_deciles)%>%do(tidy(t.test(.$averageRating~.$binary)))
+
+```
+
+Other variables could be confounding the relationship we see here. For example, genre may be associated both with whether a movie passes and how the viewers rate the movie (different audiences may have different preferences and norms). First, we created a catch-all modeling adjusting for year, budget, domestic and international gross, run time, number of votes, and all genres (we don't think any of these are intermediates between passing and ratings).
+
+Next we considered three models:
+1) A model predicting ratings by Bechdel Test, year, budget, domestic and international gross, run time, number of votes, and all genres
+2) A model predicting ratings by Bechdel Test, year, budget, domestic and international gross, run time, and number of votes
+3) A model predicting ratings by Bechdel Test, year, budget, run time, number of votes, and all genres
+4) A model predicting ratings by Bechdel Test, year, budget, run time, and number of votes
+
+In all four models, passing the Bechdel Test was associated with a reduction in average rating by 0.104 and 0.107 (95%CI for full model: -0.170, -0.044).
+```{r, linear}
+##################linear regression
+full<-lm(averageRating~binary+year+budget_2013.+domgross_2013.+intgross_2013.+runtimeMinutes+numVotes_Rating+Action+Adventure+Animation+Biography+Comedy+Crime+Documentary+Drama+Family+Fantasy+History+Horror+Music+Musical+Mystery+News+Romance+SciFi+Sport+Thriller+War+Western, data=bechdel_rate)
+summary(full)    
+tidy(full, conf.int = TRUE)[2,]
+
+nogen<-lm(averageRating~binary+year+budget_2013.+domgross_2013.+intgross_2013.+runtimeMinutes+numVotes_Rating, data=bechdel_rate)
+tidy(nogen, conf.int = TRUE)[2,]
+
+nogross<-lm(averageRating~binary+year+budget_2013.+runtimeMinutes+numVotes_Rating+Action+Adventure+Animation+Biography+Comedy+Crime+Documentary+Drama+Family+Fantasy+History+Horror+Music+Musical+Mystery+News+Romance+SciFi+Sport+Thriller+War+Western, data=bechdel_rate)
+tidy(nogross, conf.int = TRUE)[2,]
+
+nogengross<-lm(averageRating~binary+year+budget_2013.+runtimeMinutes+numVotes_Rating, data=bechdel_rate)
+tidy(nogengross, conf.int = TRUE)[2,]
+
+```
+
+Finally, we wanted to see if there has been changes over time. If we fit a linear regression for ratings by year, and stratify by whether a movie passes or fails the Bechdel Test, we can see that ratings have been declining, and the gap in rating by Bechdel Test, in absolute terms, has been consistently narrowing over time. We also considered looking at non-linear smoothers, but we would have come to similar conclusions. 
+
+```{r, times}
+rating_time <- bechdel_rate %>% ggplot(aes(year, averageRating, color = binary)) +
+  geom_smooth(method = "lm", na.rm = TRUE) +
+  xlab("Year") +
+  ylab("Average Rating") +
+  theme_minimal()
+ 
+rating_time
+
+rating_time+geom_smooth()
+```
+
+#Profits
+
+```{r}
+bechdel_profits <- bechdel
+```
+
+```{r}
+#Modifying the Dataset
+
+##Creating Pass Indicator
+bechdel_profits$pass <- ifelse(bechdel_profits$binary == "PASS", 1, 0)
+
+##Modifying Data Types of Gross Earnings, Year, and Pass Indicators for Easier Data Manipulation
+bechdel_profits$domgross <- as.numeric(bechdel_profits$domgross)
+bechdel_profits$intgross <- as.numeric(bechdel_profits$intgross)
+bechdel_profits$`domgross_2013.` <- as.numeric(bechdel_profits$`domgross_2013.`)
+bechdel_profits$`intgross_2013.` <- as.numeric(bechdel_profits$`intgross_2013.`)
+bechdel_profits$pass <- as.factor(bechdel_profits$pass)
+
+##Creating Domestic and International Profit Variables, using 2013-adjusted dollars
+bechdel_profits <- bechdel_profits %>% mutate(intprofit = `intgross_2013.` - budget)
+bechdel_profits$intprofit <- as.numeric(bechdel_profits$intprofit)
+bechdel_profits$logintprof <- log(bechdel_profits$intprofit)
+bechdel_profits <- bechdel_profits %>% mutate(domprofit = `domgross_2013.` - budget)
+bechdel_profits$domprofit <- as.numeric(bechdel_profits$domprofit)
+bechdel_profits$logdomprof <- log(bechdel_profits$domprofit)
+
+##Inspecting Data Again
+head(bechdel_profits)
+```
+
+## Profitability and Bechdel Test
+
+```{r}
+
+## Exploring Potential Relationships between Pass Indicator and Profit Through Boxplots
+p1 <- bechdel_profits %>% ggplot(aes(binary, intprofit)) +
+  geom_boxplot(na.rm = TRUE) +
+  ylab ("International Profitability") +
+  xlab ("Bechdel Test") +
+  ds_theme_set()
+p1
+p2 <- bechdel_profits %>% ggplot(aes(binary, domprofit)) +
+  geom_boxplot(na.rm = TRUE) +
+  ylab ("Domestic Profitability") +
+  xlab ("Bechdel Test") +
+  ds_theme_set()
+p2
+p3 <- bechdel_profits %>% ggplot(aes(binary, logintprof)) +
+  geom_boxplot(na.rm = TRUE) +
+  ylab ("Log of International Profitability") +
+  xlab ("Bechdel Test") +
+  ds_theme_set()
+p3
+p4 <- bechdel_profits %>% ggplot(aes(binary, logdomprof)) +
+  geom_boxplot(na.rm = TRUE) +
+  ylab ("Log of Domestic Profitability") +
+  xlab ("Bechdel Test") +
+  ds_theme_set()
+p4
+
+## Checking Normality Assumption
+bechdel_profits %>% ggplot(aes(intprofit)) +
+  geom_histogram(binwidth = 100000000, na.rm = TRUE) +
+  xlab ("International Profit") +
+  ylab ("Count") +
+  ds_theme_set()
+bechdel_profits %>% ggplot(aes(logintprof)) +
+  geom_histogram(binwidth = 0.25, na.rm = TRUE) +
+  xlab ("Log International Profit") +
+  ylab ("Count") +
+  ds_theme_set()
+bechdel_profits %>% ggplot(aes(domprofit)) +
+  geom_histogram(binwidth = 100000000, na.rm = TRUE) +
+  xlab ("Domestic Profit") +
+  ylab ("Count") +
+  ds_theme_set()
+bechdel_profits %>% ggplot(aes(logdomprof)) +
+  geom_histogram(binwidth = 0.25, na.rm = TRUE) +
+  xlab ("Log Domestic Profit") +
+  ylab ("Count") +
+  ds_theme_set()
+```
+
+After checking the normality assumptions and drawing the box plots, we see that the untransformed profit data has an enormous spread, and is not normally distributed. The log-transformed data looks more amenable to a linear regression, as it is closer to a normal distribution and has a smaller spread, thereby rendering the box plots more visually understandable. In the regression analysis below, we thus use the log of profits.
+
+```{r}
+model1 <- bechdel_profits %>% do(tidy(lm(logintprof ~ pass, data = .), conf.int = TRUE))
+model1
+
+model2 <- bechdel_profits %>% do(tidy(lm(logdomprof ~ pass, data = .), conf.int = TRUE))
+model2
+```
+
+It looks like there is a significant association between log profitability and passing the Bechdel Test. Films that pass the Bechdel Test are less profitable (both domestically and internationally), p<0.005. However, it does appear that the effect on profitability is quite small.
+
+Given the significant association between average rating and passing the Bechdel Test, we decided to include average ratings and number of ratings in the model to see if the effect on profitability persists when we account for the popularity and acclaim of a movie. As we can see below, it does not - the Bechdel Test indicator is no longer significant. 
+
+```{r}
+mediator1 <- bechdel_profits %>% do(tidy(lm(logintprof ~ pass + numVotes_Rating + averageRating, data = .), conf.int = TRUE))
+mediator1
+mediator2 <- bechdel_profits %>% do(tidy(lm(logdomprof ~ pass + numVotes_Rating + averageRating, data = .), conf.int = TRUE))
+mediator2
+```
+
+However, it is important to note here that ratings are not a confounder, but a mediator of the relationship between passing the Bechdel Test and profit. Thus, it is not necessary to include these variables in the model; it is simply informative to know that the significant relationship between the Bechdel Test and profit is mediated by the popularity and acclaim of a movie.
+
+###Time Analysis
+
+We were interested in seeing if the relationships between Bechdel Test, profitability, and ratings have remained the same over time, and thus visualized the relationships over time to answer this question.
+
+```{r}
+
+## Graph of Average Ratings over Time, Stratified by Bechdel Test
+rating_time <- bechdel_profits %>% ggplot(aes(year, averageRating, color = binary)) +
+  geom_smooth(method = "lm", na.rm = TRUE) +
+  xlab("Year") +
+  ylab("Average Rating") +
+  ds_theme_set()
+ 
+rating_time
+
+## Graph of Average Domestic Profit over Time, Stratified by Bechdel Test
+dom_profit_time <- bechdel_profits %>% ggplot(aes(year, domprofit, color = binary)) +
+  geom_smooth(method = "lm", na.rm = TRUE) +
+  xlab("Year") +
+  ylab("Average Domestic Profit") +
+  ds_theme_set()
+
+dom_profit_time
+
+## Graph of Average International Profit over Time, Stratified by Bechdel Test
+int_profit_time <- bechdel_profits %>% ggplot(aes(year, intprofit, color = binary)) +
+  geom_smooth(method = "lm", na.rm = TRUE) +
+  xlab("Year") +
+  ylab("Average International Profit") +
+  ds_theme_set()
+
+int_profit_time
+```
+The times series analyses show the following:
+
+1. Average Rating: Average ratings of films that pass the Bechdel Test are consistently lower than those that fail it.
+2. Domestic Profit: Average domestic profit of films that pass the Bechdel Test was consistently lower than the profit of those that failed it - until 2005, when the trend reversed and films that passed started earning more than films that failed.
+3. International Profit: Average international profit of films that films that pass the Bechdel Test was consistently lower than the profit of those that failed it. However, the difference seems to be narrowing over time, and in 2013, average profits of films that failed were only a little bit higher than those of films that passed.
+
+#Genre
+
+###Initial Questions
+
+Is there a relationship between Bechdel test positivity and movie genre?
+
+What is the relationship between Bechdel test positivity and movie genre over time?
+
+###ExploratoryGenre  Analysis
+
+For each of the 22 genres, a chi square test was used to assess if there was a significant relationship between the movie being a particular genre and Bechdel Test score positivity. These tests are shown below. None of these tests indicated a statistically significant relationship. 
+
+
+```{r}
+bechdel_genre<-bechdel%>%mutate(binary=as.numeric(binary)-1)
+num<-43:64
+dat<-as.data.frame(num)
+summary(bechdel_genre[43])
+for (p in 1:22) {
+  num[p]
+  dat$genre[p]<-colnames(bechdel_genre[num[p]])
+  dat$false[p]<-table(bechdel_genre[num[p]])[1]
+  dat$true[p]<-table(bechdel_genre[num[p]])[2]
+}
+num<-43:64
+dat<-as.data.frame(num)
+summary(bechdel_genre[43])
+for (p in 1:22) {
+  num[p]
+  dat$genre[p]<-colnames(bechdel_genre[num[p]])
+  dat$false[p]<-table(bechdel_genre[num[p]])[1]
+  dat$true[p]<-table(bechdel_genre[num[p]])[2]
+}
+dat[
+  with(dat, order(true)),
+]
+```
+
+For the genres News, Documentary, Western, Musical, Sport and War, there were less than 30 movies within these genres and they were therefore excluded from the analysis. The rule of thumb for a chi square analysis is that there should be at least 5 outcomes for each of the four cells in a 2x2 table. If we had an even distribution of Bechdel test positive/negative cases, this would require a sample size of at least 20. However, we do not have an even split. Therefore, we required at least 30 movies within a given genre. 
+
+```{r}
+bechdel_genre %>% filter(!is.na(Action)) %>% group_by(Action) %>% summarize(average=mean(binary)) %>%
+  select(-Action) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Adventure)) %>% group_by(Adventure) %>% summarize(average=mean(binary)) %>%
+  select(-Adventure) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Animation)) %>% group_by(Animation) %>% summarize(average=mean(binary)) %>%
+  select(-Animation) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Biography)) %>% group_by(Biography) %>% summarize(average=mean(binary)) %>%
+  select(-Biography) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Comedy)) %>% group_by(Comedy) %>% summarize(average=mean(binary)) %>%
+  select(-Comedy) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Crime)) %>% group_by(Crime) %>% summarize(average=mean(binary)) %>%
+  select(-Crime) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Drama)) %>% group_by(Drama) %>% summarize(average=mean(binary)) %>%
+  select(-Drama) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Family)) %>% group_by(Family) %>% summarize(average=mean(binary)) %>%
+  select(-Family) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Fantasy)) %>% group_by(Fantasy) %>% summarize(average=mean(binary)) %>%
+  select(-Fantasy) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(History)) %>% group_by(History) %>% summarize(average=mean(binary)) %>%
+  select(-History) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Horror)) %>% group_by(Horror) %>% summarize(average=mean(binary)) %>%
+  select(-Horror) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Music)) %>% group_by(Music) %>% summarize(average=mean(binary)) %>%
+  select(-Music) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Mystery)) %>% group_by(Mystery) %>% summarize(average=mean(binary)) %>%
+  select(-Mystery) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Romance)) %>% group_by(Romance) %>% summarize(average=mean(binary)) %>%
+  select(-Romance) %>% 
+  do(tidy(chisq.test(.)))
+```
+```{r}
+bechdel_genre %>% filter(!is.na(SciFi)) %>% group_by(SciFi) %>% summarize(average=mean(binary)) %>%
+  select(-SciFi) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+```{r}
+bechdel_genre %>% filter(!is.na(Thriller)) %>% group_by(Thriller) %>% summarize(average=mean(binary)) %>%
+  select(-Thriller) %>% 
+  do(tidy(chisq.test(.)))
+```
+
+Next, the proportion of Bechtel test positive movies per year was investigated for each genre. The genres News, Documentary, Western, Musical, Sport and War had less than 50 movies within each genre. Therefore, they were excluded from the analysis, since there were 44 years of data and a minumum of 50 movies per genre would allow for there on average to be at least one movie per year. 
+
+It was noted that some genres tend to have a higher proportion positivity than others and that within genres there was a change in the proportion over time. This is further described in the Final Analysis section. 
+
+###Final Analysis
+
+Of the 1794 movies with Bechtel Test scores, genre was available for 1791 of the movies. There were 22 genres represented among the movies: action, adventure, animation, biography, comedy, crime, documentary, drama, family, fantasy, history, horror, music, musical, news, romance, sci fi, thriller, war and western. The genres News, Documentary, Western, Musical, Sport and War had less than 50 movies within each genre and were excluded from the analysis. For each of the remaining 16 genres there was no statistically significant relationship between genre and Bechdel Test positivity, using the chi square test. 
+
+The following plots show the proportion of movies passing the Bechdel test over time for each genre. The horizontal red line on each plot is the 50% mark, used to help assess if the majority of movies in a given year and genre were Bechdel test positive. 
+
+```{r}
+plotThriller <- bechdel_genre %>% filter(!is.na(Thriller)) %>% filter(Thriller=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotSport <- bechdel_genre %>% filter(!is.na(Sport)) %>% filter(Sport=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotSciFi <- bechdel_genre %>% filter(!is.na(SciFi)) %>% filter(SciFi=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotRomance <- bechdel_genre %>% filter(!is.na(Romance)) %>% filter(Romance=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotNews <- bechdel_genre %>% filter(!is.na(News)) %>% filter(News=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotMystery <- bechdel_genre %>% filter(!is.na(Mystery)) %>% filter(Mystery=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotMusic <- bechdel_genre %>% filter(!is.na(Music)) %>% filter(Music=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotHorror <- bechdel_genre %>% filter(!is.na(Horror)) %>% filter(Horror=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotHistory <- bechdel_genre %>% filter(!is.na(History)) %>% filter(History=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotFantasy <- bechdel_genre %>% filter(!is.na(Fantasy)) %>% filter(Fantasy=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotFamily <- bechdel_genre %>% filter(!is.na(Family)) %>% filter(Family=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotDocumentary <- bechdel_genre %>% filter(!is.na(Documentary)) %>% filter(Documentary=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotDrama <- bechdel_genre %>% filter(!is.na(Drama)) %>% filter(Drama=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotCrime <- bechdel_genre %>% filter(!is.na(Crime)) %>% filter(Crime=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotComedy <- bechdel_genre %>% filter(!is.na(Comedy)) %>% filter(Comedy=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotBiography <- bechdel_genre %>% filter(!is.na(Biography)) %>% filter(Biography=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotAnimation <- bechdel_genre %>% filter(!is.na(Animation)) %>% filter(Animation=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotAdventure <- bechdel_genre %>% filter(!is.na(Adventure)) %>% filter(Adventure=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+plotAction <- bechdel_genre %>% filter(!is.na(Action)) %>% filter(Action=="TRUE") %>% group_by(year) %>% summarize(average=mean(binary))
+p3 <-  plotThriller %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Thrillers") +
+  geom_hline(yintercept=0.5, color="red")
+p5 <-  plotSciFi %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Science Fiction") +
+  geom_hline(yintercept=0.5, color="red")
+p6 <-  plotRomance %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Romance") +
+  geom_hline(yintercept=0.5, color="red")
+p7 <-  plotMystery %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Mysteries") +
+  geom_hline(yintercept=0.5, color="red")
+p9 <-  plotMusic %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Movies about Music") +
+  geom_hline(yintercept=0.5, color="red")
+p10 <-  plotHorror %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Horror movies") +
+  geom_hline(yintercept=0.5, color="red")
+p11 <-  plotHistory %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Historical movies")+
+  geom_hline(yintercept=0.5, color="red")
+p12 <-  plotFantasy %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Fantasy movies") +
+  geom_hline(yintercept=0.5, color="red")
+p13 <-  plotFamily %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Family movies")+
+  geom_hline(yintercept=0.5, color="red")
+p14 <-  plotDrama %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Dramatic movies") +
+  geom_hline(yintercept=0.5, color="red")
+p15 <-  plotCrime %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Crime movies")+
+  geom_hline(yintercept=0.5, color="red")
+p16 <-  plotComedy %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Comedies")+
+  geom_hline(yintercept=0.5, color="red")
+p17 <-  plotBiography %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Biographies") +
+  geom_hline(yintercept=0.5, color="red")
+p18 <-  plotAnimation %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Animated movies") +
+  geom_hline(yintercept=0.5, color="red")
+p19 <-  plotAdventure %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Adventure movies") +
+  ylim(0, 1) +
+  geom_hline(yintercept=0.5, color="red")
+p20 <-  plotAction %>% ggplot(aes(year, average)) +
+  geom_point() +
+  geom_line() +
+  xlab("Year") + 
+  ylab("Proportion passing") +
+  ggtitle("Action movies") +
+  ylim(0, 1) +
+  geom_hline(yintercept=0.5, color="red")
+gridExtra::grid.arrange(p20,p19,p18,p17)
+gridExtra::grid.arrange(p16,p15,p14,p13)
+gridExtra::grid.arrange(p12,p11,p10,p9)
+gridExtra::grid.arrange(p7,p6,p5, p3)
+```
+
+These plots show that action, adventure, and crime movies generally have lower proportions of Bechdel Test positive movies over the years. For the movie genres action, adventure, family, fantasy, historical, and science fiction movies passing the Bechdel Test first appear in the late 1970s to 1980s. Since the 1990s to 2000s, biographies, comedies, dramatic movies, family movies, fantasies movies, horror movies, and romance movies have tended to have higher proportions of Bechdel Test positive movies. 
+
+#Classification
+As feminist consumers, we may want to make an effort to seek out movies that pass the Bechdel Test-- it is, after all, a very *low* bar. After movies have been out for a while, we can turn to websites such as (BechdelTest.com) [https://bechdeltest.com/] before we choose to stream a movie. But when we are going to see a new movie in theaters, it can be hard to figure out which movies might pass or fail. We wanted to see if we could effectively predict what whether a movie passes the Bechdel Test based on information we would have when a movie is newly released:
+
+* the genre
+* the budget
+* the run time
+* the year
+
+With so little information, we knew prediction would be hard, but we wanted to try.
+```{r, prediction data, echo=FALSE}
+bechdel_pred<-bechdel%>%filter(!is.na(binary), !is.na(averageRating))%>%mutate(domgross_2013.=as.numeric(domgross_2013.), intgross_2013.=as.numeric(intgross_2013.))
+```
+
+The first prediction model we considered was a logistic regression model. First, we split the data into a training and testing set, with 70% of the data in the training set.
+
+```{r, logistic}
+#narrowing to just data I need
+ind<-c(3,8,9,41,43:63)
+bechdel_pred<-bechdel_pred[,ind]
+y<-bechdel_pred$binary
+#creating training and testing data
+set.seed(3)
+#creating training with 70% of data, testing with 30%
+train_index <- createDataPartition(y, times = 1, p = 0.7, list = FALSE)
+train_set <- bechdel_pred[train_index, ]
+test_set <- bechdel_pred[-train_index, ]
+```
+
+We then fit a logistic regression model predicting whether a movie would pass the Bechdel Test based on it's year, budget, genre, and run-time. A logistic model gives us the predicted probability that a movie will meet the Bechdel Test, but does not classify the movies. So many movies come out in a year, one person can't see them all. We decided it was important to have a high positive predictive value-- if we guess that a movie will pass the Bechdel Test, we don't want to be disappointed in the theater. But if we occasionally miss a movie that passes, we'll get over it. Thus, we decided to maximize our positive predictive value. 
+
+In our training data set the best cut off is when a movie has predicted probability of passing greater than 62%. While slightly higher cut offs may have produced a better PPV in the training data set, PPV rapidly declines in the 70-80% range, so we selected 60% to avoid over fitting our model.
+
+```{r, model, warning=FALSE, warning=FALSE}
+#straight forward model
+glm_fit <- train_set %>%glm(binary ~., data=., family = "binomial")
+#prediction
+train_set$phat<-predict(glm_fit, newdata = train_set, type="response")
+Num<-1:100
+reps<-as.data.frame(Num)
+reps<-reps%>%mutate(acc=rep(0,100),sens=rep(0,100), spec=rep(0,100), ppv=rep(0,100), npv=rep(0,100))
+for(k in 1:100){
+  y_hat <- ifelse(train_set$phat<(k/100), "FAIL", "PASS")
+  temp<-confusionMatrix(data = as.factor(y_hat), reference = as.factor(train_set$binary), positive = "PASS")
+  reps$acc[k]<-temp$overall["Accuracy"]
+  reps$sens[k]<-temp$byClass["Sensitivity"]
+  reps$spec[k]<-temp$byClass["Specificity"]
+  reps$ppv[k]<-temp$byClass["Pos Pred Value"]
+  reps$npv[k]<-temp$byClass["Neg Pred Value"]
+}
+
+reps%>%filter(Num<86)%>%ggplot(aes(Num, ppv))+geom_point()+geom_smooth()+
+xlab("Cut Off Percentage")+ylab("Positive Predictive Value")+ggtitle("Positive Predictive Value by Cut Off for Classification")+geom_vline(aes(xintercept=62), lty=2, col="darkgreen")+geom_text(aes(x = 60, y =0.3, label = "Ideal Cut Off In Training"), angle=90, col="darkgreen")
+
+reps%>%ggplot(aes((1-spec),sens))+geom_point()+geom_line()+geom_abline(aes(intercept=0,slope=1), lty=2, col="blue")+
+  ggtitle("ROC Curve")+xlab("False Positive Rate (1-Specificity)")+ylab("Sensitivity")
+
+reps%>%filter(Num==62)
+```
+
+Using this cut off in our testing data set, we found an overall accuracy of 59%, a sensitivity of 23%, specificity of 87%, a PPV of 60%, and an NPV of 58%. This suggests that if we use our model, we can expect that 60% of the movies we identify as passing the Bechdel Test actually will. While this is low, it is a moderate improvement over the population prevalence of 45% of movies passing the test. 
+
+```{r, evaltestdata}
+test_set$phat<-predict(glm_fit, newdata = test_set, type="response")
+y_hat <- ifelse(test_set$phat<(62/100), "FAIL", "PASS")
+confusionMatrix(data = as.factor(y_hat), reference = as.factor(test_set$binary), positive = "PASS")
+```
+
+Next, we decided to explore whether a non-parametric method, such as K Nearest Neighbors was better suited for classifying whether a movie will pass or fail the Bechdel Test. Using the same testing and training data set as before, we first assessed how many k-neighbors should be used to classify a movie. Using PPV and a simple decision rule of probability>50%, we found that 1 neighbor had the highest PPV. 
+
+```{r}
+Neigh<-1:100
+reps1<-as.data.frame(Neigh)
+reps1<-reps1%>%mutate(acc=rep(0,100),sens=rep(0,100), spec=rep(0,100), ppv=rep(0,100), npv=rep(0,100))
+for(p in 1:100){
+  knn_fit <- knn3(binary~.,data = train_set, k=p )
+  f_hat <- predict(knn_fit, newdata = train_set)[,2]
+  y_hat <- ifelse(f_hat<.5, "FAIL", "PASS")
+  temp<-confusionMatrix(data = as.factor(y_hat), reference = as.factor(train_set$binary), positive = "PASS")
+  reps1$acc[p]<-temp$overall["Accuracy"]
+  reps1$sens[p]<-temp$byClass["Sensitivity"]
+  reps1$spec[p]<-temp$byClass["Specificity"]
+  reps1$ppv[p]<-temp$byClass["Pos Pred Value"]
+  reps1$npv[p]<-temp$byClass["Neg Pred Value"]
+}
+reps1%>%filter(Neigh<10)%>%ggplot()+geom_point(aes(Neigh, ppv), col="blue")+geom_smooth(aes(Neigh, ppv), col="blue")+
+  xlab("Cut Off Percentage")+ylab("Percent")+
+  ggtitle("Positive Predictive Value by Number Of K Neighbors")+ylim(0.3,1.1)
+which.max(reps1$ppv)  
+
+reps1%>%filter(Neigh==1)
+
+```
+
+With only 1 neighbor, there is no need to further refine our decision rule (the predicted probability will be 0 or 100%, depending on whether the most similar movie failed or passed the test). Unfortunately, when we applied this model to our testing data set, we found positive predictive value that was almost indistinguishable from the prevalence of movies that passed (44% vs 45%). In other words, if you were to randomly choose a movie to watch, or if you chose a movie from the list we predicted would pass, you would essentially have the same chance of actually seeing a movie that passes the Bechdel Test. 
+
+```{r, testing}
+knn_fit <- knn3(binary~.,data =train_set, k=1)
+f_hat <- predict(knn_fit, newdata = test_set)[,2]
+test_set$y_hat <- ifelse(f_hat<.5, "FAIL", "PASS")
+confusionMatrix(data = as.factor(test_set$y_hat), reference = as.factor(test_set$binary), positive = "PASS")
+```
+
+
+#Biopics and Diversity
+
+##Cleaning the Data
+```{r}
+bio_bech <- bechdel
+
+bio_bech <- bio_bech %>% filter(Have_biopic == "Yes") %>% select(imdb, title, binary, `budget_2013.`, `domgross_2013.`, `intgross_2013.`, averageRating, country, year, year_release, number_of_subjects, subject_race, person_of_color, subject_sex, runtimeMinutes, genres)
+
+bio_bech$person_of_color[bio_bech$person_of_color == "0"] <- "White Lead"
+bio_bech$person_of_color[bio_bech$person_of_color == "1"] <- "POC Lead"
+
+```
+
+## Descriptive Statistics
+```{r}
+table(bio_bech$Have_biopic)
+table(bio_bech$binary)
+table(bio_bech$subject_sex)
+table(bio_bech$subject_race)
+table(bio_bech$person_of_color)
+```
+
+Of the 1712 films, 82 were biopics and had data related to the subjects race. Therefore, this sub-analysis will focus specifically at those 82 biopics. 
+
+Of all the biopics, 45 failed the Bechdel Test and 37 passed the Bechdel Test. The biopics were a combination of films following the lives of people of color and white people. 
+
+The main characters came from 10 different racial categories: African (n=1), African American (n=10), Asian (n=1), Asian American (n=1), Hispanic (Latin American) (n=2), Hispanic (Latina) (n=1), Middle Eastern (n=1), Middle Eastern (White) (n=1), Native American (n=1), and White (n=37). 
+
+###Sankey Plot
+```{r}
+library(readxl)
+library(devtools)
+library(googleVis)
+library(shiny)
+
+sankeydata <- data.frame(C= c("All biopics", "All biopics", "Pass", "Pass", "Pass", "Pass", "Pass", "Pass", "Fail", "Fail","Fail","Fail","Fail","Fail","Fail","Fail" ), D = c("Pass", "Fail", "African American", "Asian American", "Hispanic Latina", "Middle Eastern", "White", "Unknown", "African", "African American", "Asian", "Middle Eastern (White)", "Native American", "White", "Hispanic (Latin America", "Unknown"), Weight = c(37, 45, 1, 1, 1, 1, 24, 9, 1, 9, 1, 1, 1, 13, 2, 17))
+
+plot(
+  gvisSankey(sankeydata, from="C", 
+             to="D", weight="Weight", 
+             options=list(
+               sankey="{link:{color:{fill:'lightblue'}}}"
+               ))
+)
+
+```
+
+With only 1 neighbor, there is no need to further refine our decision rule (the predicted probability will be 0 or 100%, depending on whether the most similar movie failed or passed the test). Unfortunately, when we applied this model to our testing data set, we found positive predictive value that was almost indistinguishable from the prevalence of movies that passed (44% vs 45%). In other words, if you were to randomly choose a movie to watch, or if you chose a movie from the list we predicted would pass, you would essentially have the same chance of actually seeing a movie that passes the Bechdel Test. This plot helps summarize and visualize the relationship between movies that pass the bechdel and their respective racial diversity. As we can see from the above plot, less movies pass the Bechdel Test. And of those passing - most of them portray a white protagonist. 
+
+##Univariate Statistics
+
+###Average Rating
+
+```{r}
+library(plotly)
+a <- ggplot(bio_bech, aes(x = year, y = averageRating, color = binary, text = paste("Movie: ", title, "<br> Race of biopic Lead:", subject_race) )) + 
+  geom_point() + 
+  facet_grid(person_of_color ~.) + 
+  scale_color_brewer(palette="Accent") +
+  theme_dark()
+a <- ggplotly(a)
+a
+
+```
+
+###Domestic Gross Earnings
+```{r}
+c <- ggplot(bio_bech, aes(x = year, y = `domgross_2013.`, color = binary, text = paste("Movie: ", title, "<br> Race of biopic Lead:", subject_race) )) + 
+  geom_point() + 
+  facet_grid(person_of_color ~.) + 
+  scale_color_brewer(palette="Set3") +
+  theme_dark()
+c <- ggplotly(c)
+c
+```
+
+###International Gross Earnings
+```{r}
+d <- ggplot(bio_bech, aes(x = year, y = `intgross_2013.`, color = binary, text = paste("Movie: ", title, "<br> Race of biopic Lead:", subject_race) )) + 
+  geom_point() + 
+  facet_grid(person_of_color ~.) + 
+  scale_color_brewer(palette="Paired") +
+  theme_dark()
+d <- ggplotly(d)
+d
+```
+
+##Running Logistics Regression
+```{r}
+bio_bech %>% do(tidy(glm(binary ~ person_of_color, family=binomial, data =.)))
+bio_bech %>% do(tidy(glm(binary ~ person_of_color + subject_sex, family=binomial, data =.)))
+bio_bech %>% do(tidy(glm(binary ~ person_of_color + subject_sex + person_of_color*subject_sex, family=binomial, data =.)))
+```
+
+To test these relationships I choose to do regression analysis, as opposed to KNN because there wasn't enough data points to confidently run a KNN. I chose to run a series of logistic regressions as the outcome of interest (passing the Bechdel Test) is a binary variable. As the predictor variables are also binary I chose not to make a scatter plot as the plot gave very little meaningful information. 
+
+When assessing the relationship between passing the Bechdel Test and subject race, none of the regression coefficients were significant. This is likely because many of the racial subgroups only had 1 observation. As such, instead of assessing the relationship between the Bechdel Test and subject's race - the remainder of the analysis will group all racial minorities together and assess the relationship between the Bechdel Test and whether the main character was a person of color or not. 
+
+On average the log odds of passing the Bechdel Test falls by 1.209 when the main character is a person of color compared to when the main character is white. In other words, the odds of passing the Bechdel Test is 0.298:1 when the main character is a person of color compared to when the main character is white. The p-value is 0.052, so this result is borderline  significant. 
+
+After accounting for sex of the main character, on average the log odds of passing the Bechdel Test falls by 1.576 when the main character is a person of color compared to when the main character is white. This result is statistically significant at the alpha = 0.05 level, as the p-value is 0.04396. 
+
+This aligns with the often used racist stereotype in Hollywood that movies can't push too many diversity angles.  
+
+Controlling for race, on average the log odds of passing the Bechdel Test increases by 2.875 when the main character is a female compared to a male main character. In this model, the odds for a women of color passing the Bechdel Test is 2.0158, and this is small compared to the odds of passing the Bechdel Test when the main character is a white woman which is 9.754833. The p-value is 0.0000962. This result is statistically significant at the alpha = 0.05 level.  
+
+The final model includes the interaction effect of race and sex, however this entire model is insignificant. 
+
+#Conclusion
+In conclusion, we find that the Bechdel test is significantly (p<0.05) associated with the average ratings of a movie, as well as its profitability (although the latter impact is small in size). In both cases, passing the Bechdel test reduces a movie's profits and ratings. Thus, movies that choose to represent women positively face negative material impacts in terms of popularity and critical acclaim. This relationship has remained the same over time, but a positive trend to note is that the profitability and rating gap between movies that pass the test and do not pass the test has narrowed. 
+
+There is no statistically significant relationship between movie genre and proportion of movies that pass the Bechdel test. However, trends exist for individual genres. Action, adventure, and crime movies have lower proportions of Bechdel Test positive movies over time. Since the 1990s to 2000s, biographies, comedies, dramas, family movies, fantasies, horror movies, and romances have had higher proportions of Bechdel Test positive movies.
+
+Finally, in our analysis on the subset of movies that were biographical, we found that movies that are biopics about people of color are less likely to pass the Bechdel test, suggesting that there is an unspoken limit to the amount of diversity a movie can represent.
+
+These results are unsurprising but disheartening, suggesting that there is a need for a critical and thoughtful conversation about how our culture represents women and people of color in media.
