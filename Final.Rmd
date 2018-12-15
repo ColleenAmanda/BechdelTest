@@ -69,7 +69,8 @@ library(dslabs)
 ds_theme_set()
 library(readr)
 library(stringr)
-bechdel<-read.csv("C:/Users/Colleen Reynolds/Dropbox/Harvard/Data_Science/Group project/data1.csv")
+#Data can be downloaded here: https://github.com/ColleenAmanda/BechdelTest
+bechdel<-read.csv("data1.csv")
 bechdel<-bechdel%>%mutate(Action=str_detect(genres, "Action"), Adventure=str_detect(genres,"Adventure"),
                    Animation=str_detect(genres, "Animation"),Biography=str_detect(genres, "Biography"),
                    Comedy=str_detect(genres, "Comedy"), Crime=str_detect(genres,"Crime"),
